@@ -15,6 +15,7 @@ Cấu hình bằng biến môi trường (xem README / hướng dẫn):
   GH_REPOS       repo GitHub để theo dõi bản phát hành
   YT_CHANNELS    channel_id YouTube (tùy chọn)
   NEWS_N         số tin hiển thị (mặc định 5)
+  TRANSLATE_VI   =1 (mặc định) dịch tiêu đề tin sang tiếng Việt, 0 để tắt
   DEMO_NEWS=1    dùng tin giả (để thử ngoại tuyến)
 """
 import os, sys, json, datetime as dt, xml.etree.ElementTree as ET
@@ -186,6 +187,17 @@ def news_youtube():
             out.append(("YOUTUBE", title, ago(t), t))
     return out
 
+def to_vi(text):
+    """Dịch sang tiếng Việt (Google Translate miễn phí, không cần khóa). Lỗi thì giữ nguyên bản."""
+    try:
+        r = requests.get("https://translate.googleapis.com/translate_a/single",
+                         params={"client": "gtx", "sl": "auto", "tl": "vi", "dt": "t", "q": text}, timeout=15)
+        r.raise_for_status()
+        vi = "".join(part[0] for part in r.json()[0] if part and part[0]).strip()
+        return vi or text
+    except Exception as ex:
+        log("LỖI dịch", ex); return text
+
 def load_news():
     if os.environ.get("DEMO_NEWS"):
         h = lambda x: now - dt.timedelta(hours=x)
@@ -206,6 +218,8 @@ def load_news():
         i += 1
     for k, (s, t, m, ts) in enumerate(picked):          # nguồn có điểm thì giữ, còn lại ghi giờ
         if s in ("REDDIT",): picked[k] = (s, t, f"{m} · {ago(ts)}", ts)
+    if os.environ.get("TRANSLATE_VI", "1") == "1":     # dịch tiêu đề (bỏ qua GitHub vì là số phiên bản)
+        picked = [(s, t if s == "GITHUB" else to_vi(t), m, ts) for (s, t, m, ts) in picked]
     return sorted(picked, key=lambda x: x[3], reverse=True)
 
 # ---------------------------------------------------------------- VẼ
