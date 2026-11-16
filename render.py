@@ -188,15 +188,25 @@ def news_youtube():
     return out
 
 def to_vi(text):
-    """Dịch sang tiếng Việt (Google Translate miễn phí, không cần khóa). Lỗi thì giữ nguyên bản."""
-    try:
-        r = requests.get("https://translate.googleapis.com/translate_a/single",
-                         params={"client": "gtx", "sl": "auto", "tl": "vi", "dt": "t", "q": text}, timeout=15)
-        r.raise_for_status()
-        vi = "".join(part[0] for part in r.json()[0] if part and part[0]).strip()
-        return vi or text
-    except Exception as ex:
-        log("LỖI dịch", ex); return text
+    """Dịch sang tiếng Việt (Google Translate miễn phí, không cần khóa).
+    Thử tối đa 3 lần (nghỉ 2s, 4s) vì GitHub hay bị giới hạn tạm thời. Hết lượt thì giữ nguyên bản."""
+    import time
+    last = None
+    for attempt in range(3):
+        try:
+            r = requests.get("https://translate.googleapis.com/translate_a/single",
+                             params={"client": "gtx", "sl": "auto", "tl": "vi", "dt": "t", "q": text},
+                             headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
+            r.raise_for_status()
+            vi = "".join(part[0] for part in r.json()[0] if part and part[0]).strip()
+            return vi or text
+        except Exception as ex:
+            last = ex
+            log("LỖI dịch (lần %d/3)" % (attempt + 1), ex)
+            if attempt < 2:
+                time.sleep(2 * (attempt + 1))
+    log("LỖI dịch: bỏ cuộc, giữ nguyên bản:", last)
+    return text
 
 def load_news():
     if os.environ.get("DEMO_NEWS"):
@@ -256,15 +266,34 @@ d.text((BW - 40, 44), now.strftime("%H:%M"), font=F(64, True), fill=255, anchor=
 y = 150
 usage = load_usage()
 if usage:
-    d.text((40, y), "CLAUDE", font=F(26, True), fill=0)
-    d.text((40, y + 30), f"{int(usage.get('session_pct', 0))}%", font=F(96, True), fill=0)
+    def _t(v):            # epoch (giây) hoặc chuỗi ISO -> datetime có múi giờ; lỗi -> None
+        try:
+            if v is None or v == "": return None
+            if isinstance(v, (int, float)): return dt.datetime.fromtimestamp(v, TZ)
+            return dt.datetime.fromisoformat(str(v).replace("Z", "+00:00")).astimezone(TZ)
+        except Exception: return None
+    pct = usage.get("session_pct", 0)
     rm = usage.get("session_reset_min")
-    sub = "phiên 5 giờ" + (f" · reset sau {rm // 60}g {rm % 60:02d}p" if rm is not None else "")
+    ra = _t(usage.get("session_reset_at"))
+    expired = False
+    if ra is not None:                                  # tính lại số phút còn lại tại thời điểm vẽ ảnh
+        rm = int((ra - now).total_seconds() // 60)
+        if rm <= 0: expired, rm, pct = True, None, 0     # phiên đã reset -> mức dùng về 0
+    d.text((40, y), "CLAUDE", font=F(26, True), fill=0)
+    up = _t(usage.get("updated_at"))
+    if up:
+        old = (now - up).total_seconds() > 6 * 3600     # quá 6 giờ chưa được cập nhật -> báo là số cũ
+        d.text((BW - 40, y + 2), f"số liệu lúc {up:%H:%M}" + (" (cũ)" if old else ""), font=F(22), fill=100, anchor="ra")
+    d.text((40, y + 30), f"{int(pct)}%", font=F(96, True), fill=0)
+    sub = "phiên 5 giờ" + (" · đã reset" if expired else (f" · reset sau {rm // 60}g {rm % 60:02d}p" if rm is not None else ""))
     d.text((300, y + 50), sub, font=F(28), fill=0)
-    bar(300, y + 95, BW - 340, 34, usage.get("session_pct", 0))
+    bar(300, y + 95, BW - 340, 34, pct)
     if usage.get("week_pct") is not None:
-        d.text((300, y + 142), f"Tuần {int(usage['week_pct'])}%", font=F(26, True), fill=0)
-        bar(450, y + 144, BW - 490, 26, usage["week_pct"], fill=90)
+        wp = usage["week_pct"]
+        wr = _t(usage.get("week_reset_at"))
+        if wr is not None and wr <= now: wp = 0          # tuần đã reset -> về 0
+        d.text((300, y + 142), f"Tuần {int(wp)}%", font=F(26, True), fill=0)
+        bar(450, y + 144, BW - 490, 26, wp, fill=90)
     y += 195
     d.line((40, y, BW - 40, y), fill=0, width=4); y += 20
 else:
